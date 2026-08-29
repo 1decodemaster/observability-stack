@@ -1,0 +1,39 @@
+# Recording rules that map backend-specific metric families (vllm:*, llamacpp:*)
+# onto a single, model-agnostic `llm:*` namespace, per machine.
+#
+# `or on(machine)` semantics: if a machine isn't running a given backend its
+# side yields no series and the other backend's value is used, so the
+# dashboard reflects whichever serving engine is up on each machine.
+groups:
+  - name: llm_normalized
+    interval: 15s
+    rules:
+      # Decode / generation tokens per second
+      - record: llm:decode_tokens_per_second
+        expr: |
+          sum by (machine) (rate(vllm:generation_tokens_total[1m]))
+          or on(machine) sum by (machine) (llamacpp:predicted_tokens_seconds)
+
+      # Prompt tokens per second
+      - record: llm:prompt_tokens_per_second
+        expr: |
+          sum by (machine) (rate(vllm:prompt_tokens_total[1m]))
+          or on(machine) sum by (machine) (llamacpp:prompt_tokens_seconds)
+
+      # Requests currently being processed
+      - record: llm:requests_running
+        expr: |
+          sum by (machine) (vllm:num_requests_running)
+          or on(machine) sum by (machine) (llamacpp:requests_processing)
+
+      # Requests queued / deferred
+      - record: llm:requests_queued
+        expr: |
+          sum by (machine) (vllm:num_requests_waiting)
+          or on(machine) sum by (machine) (llamacpp:requests_deferred)
+
+      # Cumulative tokens predicted (for rate() in the dashboard)
+      - record: llm:tokens_predicted_total
+        expr: |
+          sum by (machine) (vllm:generation_tokens_total)
+          or on(machine) sum by (machine) (llamacpp:tokens_predicted_total)

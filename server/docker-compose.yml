@@ -1,0 +1,78 @@
+# =============================================================================
+# Metrics Stack - SERVER (central aggregation)
+# -----------------------------------------------------------------------------
+# Deploy on one central machine (or a Proxmox VM/LXC):
+#   docker compose up -d
+#
+# Clients (client/ directory) ship data here via Loki push + Prometheus
+# remote_write. This stack has NO local scrape jobs — it only receives,
+# stores, alerts and visualises.
+#
+# Ports:
+#   grafana        3000   dashboards
+#   prometheus     9090   query + remote_write receiver
+#   loki           3100   log query + push (clients push here)
+#   alertmanager   9093   alerts (channel configured in alertmanager/)
+# =============================================================================
+
+name: metrics-stack-server
+
+services:
+  loki:
+    image: grafana/loki:latest
+    container_name: metrics-stack-server-loki
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - loki-data:/loki
+    ports:
+      - "3100:3100"
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: metrics-stack-server-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2160h
+      # Required for clients' prometheus.remote_write to be accepted.
+      - --web.enable-remote-write-receiver
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: metrics-stack-server-alertmanager
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager-data:/alertmanager
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: metrics-stack-server-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  alertmanager-data:

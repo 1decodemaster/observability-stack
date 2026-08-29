@@ -1,0 +1,14 @@
+# Server Prometheus: pure receiver.
+# All data arrives via remote_write from client Alloy agents, which stamp
+# every sample with a `machine` external label.
+
+global:
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]

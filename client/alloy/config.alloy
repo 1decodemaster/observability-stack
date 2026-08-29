@@ -1,0 +1,216 @@
+// Grafana Alloy client configuration.
+//
+// Environment (from client/.env via docker compose):
+//   MACHINE           machine name; stamped onto every stream and sample
+//   SERVER_LOKI_URL   e.g. http://homelab:3100/loki/api/v1/push
+//   SERVER_PROM_URL   e.g. http://homelab:9090/api/v1/write
+//   LLM_TARGET_1..3   LLM serving endpoints (blank = disabled)
+
+// ---------------------------------------------------------------------------
+// Forwarding
+// ---------------------------------------------------------------------------
+
+loki.write "server" {
+  external_labels = {
+    machine = sys.env("MACHINE"),
+  }
+  endpoint {
+    url = sys.env("SERVER_LOKI_URL")
+  }
+  // Disk write-ahead log: entries are journaled before send, so a crash or
+  // network outage doesn't lose logs. Requires -stability.level=experimental.
+  wal {
+    enabled = true
+  }
+}
+
+prometheus.remote_write "server" {
+  external_labels = {
+    machine = sys.env("MACHINE"),
+  }
+  endpoint {
+    url = sys.env("SERVER_PROM_URL")
+  }
+  // WAL is built in: unsent metrics buffer on disk and replay after restart.
+  wal {
+    max_keepalive_time = "24h"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Logs: host syslog
+// ---------------------------------------------------------------------------
+
+loki.source.file "syslog" {
+  targets = [
+    {
+      __path__ = "/var/log/syslog",
+      job      = "syslog",
+    },
+  ]
+  forward_to = [loki.process.syslog.receiver]
+}
+
+loki.process "syslog" {
+  forward_to = [loki.write.server.receiver]
+
+  // Parse both RFC3339 (rsyslog default) and legacy BSD syslog lines:
+  //   "2026-08-28T01:58:14.09+00:00 pensive dockerd[5565]: ..."
+  //   "Aug 27 23:55:20 pensive kernel: ..."
+  stage.regex {
+    expression = "^(?P<ts>\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:?\\d{2})?|\\w{3}\\s+\\d{1,2}\\s+\\d{2}:\\d{2}:\\d{2})\\s+(?P<host>\\S+)\\s+(?P<program>[^:\\[]+)(?:\\[\\d+\\])?:\\s?(?P<message>.*)$"
+  }
+
+  stage.timestamp {
+    source = "ts"
+    format = "RFC3339Nano"
+  }
+
+  stage.labels {
+    values = {
+      host    = "",
+      program = "",
+    }
+  }
+
+  stage.metrics {
+    metric.counter {
+      name        = "syslog_lines_total"
+      description = "total syslog lines ingested"
+      match_all   = true
+      action      = "inc"
+    }
+  }
+
+  stage.match {
+    selector = "{job=\"syslog\"} |~ \"(?i)(error|panic|fatal|critical|oom|crash|segfault|killed|failed)\""
+    stage.metrics {
+      metric.counter {
+        name        = "syslog_errors_total"
+        description = "syslog lines matching error/fatal/crash patterns"
+        match_all   = true
+        action      = "inc"
+      }
+    }
+  }
+
+  stage.match {
+    selector = "{job=\"syslog\"} |~ \"(?i)(machine check|\\bmce\\b|hardware error|\\bedac\\b|memory failure|corrected error|uncorrectable)\""
+    stage.metrics {
+      metric.counter {
+        name        = "syslog_mce_total"
+        description = "syslog lines matching hardware RAS / MCE patterns"
+        match_all   = true
+        action      = "inc"
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Logs: docker containers (via Docker API; dedupes per container ID)
+// ---------------------------------------------------------------------------
+
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// Extract a clean `container` label from the Docker container name
+// ("__metrics-stack-client-alloy" -> "metrics-stack-client-alloy").
+// `__`-prefixed labels are dropped automatically from the final log streams.
+// Containers named in LLM_CONTAINER_1..3 (.env) are tagged role="serving" so
+// dashboards can show the LLM serving engine's logs specifically.
+// (A blank slot compiles to a regex matching only the empty string = no-op.)
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["container"]
+    regex         = sys.env("LLM_CONTAINER_1")
+    target_label  = "role"
+    replacement   = "serving"
+  }
+  rule {
+    source_labels = ["container"]
+    regex         = sys.env("LLM_CONTAINER_2")
+    target_label  = "role"
+    replacement   = "serving"
+  }
+  rule {
+    source_labels = ["container"]
+    regex         = sys.env("LLM_CONTAINER_3")
+    target_label  = "role"
+    replacement   = "serving"
+  }
+}
+
+loki.source.docker "containers" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.relabel.containers.output
+  labels  = {
+    job = "docker",
+  }
+  forward_to = [loki.write.server.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// Metrics
+// ---------------------------------------------------------------------------
+
+prometheus.scrape "host" {
+  targets = [
+    {
+      __address__ = "node-exporter:9100",
+      job         = "node",
+    },
+  ]
+  forward_to = [prometheus.remote_write.server.receiver]
+}
+
+prometheus.scrape "gpu" {
+  targets = [
+    {
+      __address__ = "dcgm-exporter:9400",
+      job         = "dcgm",
+    },
+  ]
+  forward_to = [prometheus.remote_write.server.receiver]
+}
+
+prometheus.scrape "ras" {
+  targets = [
+    {
+      __address__ = "ras-exporter:9108",
+      job         = "ras",
+    },
+  ]
+  forward_to = [prometheus.remote_write.server.receiver]
+}
+
+// LLM serving backends (LLM_TARGET_1..3 in .env, e.g.
+// "host.docker.internal:8000"). entrypoint.sh materializes the non-blank
+// slots into llm-targets.json (Prometheus file-SD format); blank = disabled.
+discovery.file "llm" {
+  files = ["/var/lib/alloy/llm-targets.json"]
+}
+
+prometheus.scrape "llm" {
+  targets    = discovery.file.llm.targets
+  forward_to = [prometheus.remote_write.server.receiver]
+}
+
+// Self-monitoring: Alloy telemetry + the loki.process stage.metrics counters
+// (loki_process_custom_syslog_*_total).
+prometheus.scrape "alloy" {
+  targets = [
+    {
+      __address__ = "127.0.0.1:12345",
+      job         = "alloy",
+    },
+  ]
+  forward_to = [prometheus.remote_write.server.receiver]
+}

@@ -1,0 +1,119 @@
+# =============================================================================
+# Metrics Stack - CLIENT (emitter)
+# -----------------------------------------------------------------------------
+# Deploy on every machine whose metrics/logs you want to collect.
+#
+#   1. Copy this client/ directory to the machine
+#   2. cp .env.example .env  and edit (MACHINE, SERVER_*_URL, profiles, LLM)
+#   3. docker compose up -d
+#
+# What it runs:
+#   alloy          Grafana Alloy agent: tails syslog + container logs, scrapes
+#                  all local exporters, buffers on disk (WALs) and ships to
+#                  the server. Survives crashes: unsent data replays on reboot.
+#   node-exporter  host CPU/RAM/disk/net/hwmon/EDAC
+#   dcgm-exporter  NVIDIA GPU metrics        (profile: gpu)
+#   ras-exporter   hardware RAS errors from rasdaemon (CE/UE per DIMM)
+#                                   (profile: ras)
+#
+# .env knobs:
+#   MACHINE           machine name stamped on all data (e.g. pensive)
+#   SERVER_LOKI_URL   http://<server>:3100/loki/api/v1/push
+#   SERVER_PROM_URL   http://<server>:9090/api/v1/write
+#   COMPOSE_PROFILES  e.g. "gpu,ras"
+#   LLM_TARGET_1..3   optional LLM endpoints via host-gateway (blank = off)
+# =============================================================================
+
+name: metrics-stack-client
+
+services:
+  alloy:
+    image: grafana/alloy:latest
+    container_name: metrics-stack-client-alloy
+    entrypoint: ["/bin/sh", "/etc/alloy/entrypoint.sh"]
+    command:
+      - run
+      - --storage.path=/var/lib/alloy
+      - --server.http.listen-addr=0.0.0.0:12345
+      # WAL for loki.write requires experimental. (prometheus.remote_write's
+      # WAL is always on; the syslog/docker pipelines and scrapes are GA.)
+      - --stability.level=experimental
+      - /etc/alloy/config.alloy
+    environment:
+      - MACHINE=${MACHINE:?set MACHINE in .env}
+      - SERVER_LOKI_URL=${SERVER_LOKI_URL:?set SERVER_LOKI_URL in .env}
+      - SERVER_PROM_URL=${SERVER_PROM_URL:?set SERVER_PROM_URL in .env}
+      - LLM_TARGET_1=${LLM_TARGET_1:-}
+      - LLM_TARGET_2=${LLM_TARGET_2:-}
+      - LLM_TARGET_3=${LLM_TARGET_3:-}
+      - LLM_CONTAINER_1=${LLM_CONTAINER_1:-}
+      - LLM_CONTAINER_2=${LLM_CONTAINER_2:-}
+      - LLM_CONTAINER_3=${LLM_CONTAINER_3:-}
+      - ALLOY_DATA_DIR=/var/lib/alloy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./alloy:/etc/alloy:ro
+      # Durable state: log positions + WALs (crash-safe replay).
+      - alloy-data:/var/lib/alloy
+      - /var/log:/var/log:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    ports:
+      - "12345:12345"
+    restart: unless-stopped
+    networks:
+      - client-net
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: metrics-stack-client-node-exporter
+    command:
+      - --path.rootfs=/host
+      - --collector.systemd
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+    networks:
+      - client-net
+
+  dcgm-exporter:
+    image: nvidia/dcgm-exporter:latest
+    container_name: metrics-stack-client-dcgm-exporter
+    profiles: ["gpu"]
+    runtime: nvidia
+    environment:
+      - DCGM_EXPORTER_INTERVAL=2000
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    networks:
+      - client-net
+
+  ras-exporter:
+    image: python:3.12-slim
+    container_name: metrics-stack-client-ras-exporter
+    profiles: ["ras"]
+    command: python /exporter.py
+    environment:
+      - RAS_DB_PATH=/var/lib/rasdaemon/ras-mc_event.db
+    volumes:
+      - ./ras-exporter/exporter.py:/exporter.py:ro
+      - /var/lib/rasdaemon:/var/lib/rasdaemon:ro
+    restart: unless-stopped
+    networks:
+      - client-net
+
+volumes:
+  alloy-data:
+
+networks:
+  client-net:
+    driver: bridge

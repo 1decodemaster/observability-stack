@@ -1,0 +1,20 @@
+# No notification channel configured yet — alerts evaluate and are visible
+# in Prometheus (/alerts) and Grafana (Alerts). To wire one up, add a
+# receiver, e.g.:
+#
+#   route:
+#     receiver: webhook
+#     group_by: [machine, alertname]
+#     group_wait: 30s
+#     repeat_interval: 4h
+#
+#   receivers:
+#     - name: webhook
+#       webhook_configs:
+#         - url: http://example.com/hooks/alerts
+#
+route:
+  receiver: "null"
+
+receivers:
+  - name: "null"

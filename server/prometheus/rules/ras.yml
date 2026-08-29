@@ -1,0 +1,35 @@
+# Hardware RAS / thermal alerts. Multi-host: every rule is grouped by the
+# `machine` external label stamped by client Alloy agents.
+groups:
+  - name: ras
+    rules:
+      # Any uncorrected memory error is a hard failure signal.
+      - alert: RasUncorrectedError
+        expr: sum by (machine) (increase(ras_mc_event_total{err_type="uncorrected"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Uncorrected memory error (UE) on {{ $labels.machine }}"
+          description: "A non-correctable memory ECC error was logged. Inspect and replace the affected DIMM. Run `sudo ras-mc-ctl --summary` on the host."
+
+      # A burst of corrected errors is the leading indicator of a dying DIMM
+      # (e.g. 108 CEs in ~9s observed on pensive 2026-08-27).
+      - alert: RasCorrectedErrorBurst
+        expr: sum by (machine) (increase(ras_mc_event_total{err_type="corrected"}[10m])) > 20
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Burst of corrected memory errors (CE) on {{ $labels.machine }}"
+          description: "More than 20 corrected memory errors in 10 minutes. Likely a degrading DIMM. Check `sudo ras-mc-ctl --summary` for the affected channel/DIMM."
+
+      # Hottest hardware sensor (typically the CPU Tctl) running too hot.
+      - alert: HostTempHigh
+        expr: max by (machine) (node_hwmon_temp_celsius) > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Hardware temperature high on {{ $labels.machine }}"
+          description: "The hottest hwmon sensor is above 85C for 5 minutes. Verify CPU/fan cooling and airflow."
