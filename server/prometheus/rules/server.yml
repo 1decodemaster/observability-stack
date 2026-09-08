@@ -1,0 +1,74 @@
+# The observability stack watching itself. If any of this is broken, the rest
+# of the alerts in this directory are not being evaluated or not being
+# delivered — so these rules matter more than the ones they protect.
+groups:
+  - name: server
+    rules:
+      - alert: StackComponentDown
+        expr: |
+          up{machine="metrics-server", job=~"loki|prometheus|grafana|alertmanager"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down on the metrics server"
+          description: "A core stack component has been unreachable for 5 minutes. Log ingestion, alerting, or dashboards are impaired."
+
+      - alert: AlertmanagerNotificationsFailing
+        expr: |
+          rate(alertmanager_notifications_failed_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Alertmanager cannot deliver notifications ({{ $labels.integration }})"
+          description: "Alerts are firing but not reaching anyone. Check the receiver configuration and its network path."
+
+      # There is no remote_write_handler_* family on this Prometheus; the TSDB
+      # append counters are where refused samples are actually recorded.
+      - alert: PrometheusRemoteWriteRejecting
+        expr: |
+          rate(prometheus_tsdb_out_of_order_samples_total[15m])
+          + rate(prometheus_tsdb_too_old_samples_total[15m])
+          + rate(prometheus_tsdb_out_of_bound_samples_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus is rejecting samples pushed by clients"
+          description: "Incoming remote_write samples are being refused — most often out-of-order samples beyond storage.tsdb.out_of_order_time_window during a client's WAL replay, or duplicate series."
+
+      - alert: PrometheusRuleEvaluationFailing
+        expr: |
+          increase(prometheus_rule_evaluation_failures_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus rule evaluations are failing"
+          description: "A recording or alerting rule errors on evaluation, so whatever it computes is missing. See Status > Rules in the Prometheus UI."
+
+      - alert: LokiIngestionErrors
+        expr: |
+          sum by (reason) (rate(loki_discarded_samples_total[15m])) > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Loki is discarding log entries ({{ $labels.reason }})"
+          description: "Loki refuses some of what clients push. `rate_limited` means raise ingestion_rate_mb; `too_far_behind` / `greater_than_max_sample_age` means a client's replay exceeds reject_old_samples_max_age."
+
+      # Retention is enforced by two independent bounds; this warns before
+      # either one starts evicting data the retention window promised to keep.
+      - alert: PrometheusStorageNearLimit
+        expr: |
+          max by (machine) (prometheus_tsdb_storage_blocks_bytes{machine="metrics-server"})
+            / on (machine)
+          max by (machine) (node_filesystem_size_bytes{machine="metrics-server", mountpoint="/"})
+            > 0.8
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus TSDB is using over 80% of the root filesystem"
+          description: "Either raise the volume size or lower PROM_RETENTION_SIZE / PROM_RETENTION_TIME in server/.env."

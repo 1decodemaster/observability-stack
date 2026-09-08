@@ -1,16 +1,88 @@
 {
-  "annotations": {
-    "list": []
-  },
+  "uid": "model-inference",
+  "title": "Model Inference",
+  "description": "LLM serving throughput, latency and the GPU/host resources behind it. Backend-agnostic: panels read the normalised llm:* recording rules, so vLLM and llama.cpp render identically.",
+  "tags": [
+    "metrics-stack"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
   "editable": true,
-  "fiscalYearStartMonth": 0,
-  "graphTooltip": 1,
-  "id": null,
-  "links": [],
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "machine",
+        "label": "Machine",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "Prometheus"
+        },
+        "query": {
+          "query": "label_values(up, machine)",
+          "refId": "machine-var"
+        },
+        "definition": "label_values(up, machine)",
+        "refresh": 2,
+        "sort": 1,
+        "regex": "",
+        "multi": true,
+        "includeAll": true,
+        "hide": 0,
+        "options": [],
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
+        "name": "container",
+        "label": "Container",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "Loki"
+        },
+        "query": {
+          "query": "label_values({job=\"docker\"}, container)",
+          "refId": "container-var"
+        },
+        "definition": "label_values({job=\"docker\"}, container)",
+        "refresh": 2,
+        "sort": 1,
+        "regex": "",
+        "multi": true,
+        "includeAll": true,
+        "hide": 0,
+        "options": [],
+        "current": {
+          "selected": true,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      }
+    ]
+  },
   "panels": [
     {
       "type": "row",
       "title": "Overview",
+      "id": 2,
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -18,27 +90,48 @@
         "x": 0,
         "y": 0
       },
-      "panels": [],
-      "id": 100
+      "panels": []
     },
     {
       "type": "stat",
-      "title": "Active backends",
+      "title": "Backends up",
+      "description": "Per machine, not folded into a fleet total \u2014 $machine is multi-select.",
       "datasource": {
         "type": "prometheus",
         "uid": "Prometheus"
       },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "count by (machine) (up{machine=~\"$machine\",job=\"llm\"} == 1) or vector(0)",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
               }
             ]
-          }
+          },
+          "mappings": []
         },
         "overrides": []
       },
@@ -47,15 +140,31 @@
           "calcs": [
             "lastNotNull"
           ],
-          "values": false
-        }
+          "fields": "",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 4,
         "x": 0,
         "y": 1
       },
+      "id": 3
+    },
+    {
+      "type": "stat",
+      "title": "Decode",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -63,21 +172,17 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "count(up{machine=~\"$machine\",job=\"llm\"} == 1)",
+          "expr": "sum by (machine) (llm:decode_tokens_per_second{machine=~\"$machine\"})",
           "instant": false,
-          "legendFormat": "up"
+          "range": true,
+          "legendFormat": "{{machine}}"
         }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Decode (tokens/s)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -87,8 +192,9 @@
               }
             ]
           },
+          "mappings": [],
           "unit": "tps",
-          "decimals": 2
+          "decimals": 1
         },
         "overrides": []
       },
@@ -97,15 +203,31 @@
           "calcs": [
             "lastNotNull"
           ],
-          "values": false
-        }
+          "fields": "",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 4,
         "x": 4,
         "y": 1
       },
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Prompt",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -113,20 +235,17 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum(llm:decode_tokens_per_second{machine=~\"$machine\"})",
-          "instant": false
+          "expr": "sum by (machine) (llm:prompt_tokens_per_second{machine=~\"$machine\"})",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
         }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Prompt (tokens/s)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -136,8 +255,9 @@
               }
             ]
           },
+          "mappings": [],
           "unit": "tps",
-          "decimals": 2
+          "decimals": 1
         },
         "overrides": []
       },
@@ -146,15 +266,31 @@
           "calcs": [
             "lastNotNull"
           ],
-          "values": false
-        }
+          "fields": "",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto"
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 4,
         "x": 8,
         "y": 1
       },
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "Running",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -162,20 +298,17 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum(llm:prompt_tokens_per_second{machine=~\"$machine\"})",
-          "instant": false
+          "expr": "sum by (machine) (llm:requests_running{machine=~\"$machine\"})",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
         }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Requests running",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -185,7 +318,7 @@
               }
             ]
           },
-          "decimals": 0
+          "mappings": []
         },
         "overrides": []
       },
@@ -194,15 +327,31 @@
           "calcs": [
             "lastNotNull"
           ],
-          "values": false
-        }
+          "fields": "",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 4,
         "x": 12,
         "y": 1
       },
+      "id": 6
+    },
+    {
+      "type": "stat",
+      "title": "Queued",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -210,30 +359,35 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum(llm:requests_running{machine=~\"$machine\"})",
-          "instant": false
+          "expr": "sum by (machine) (llm:requests_queued{machine=~\"$machine\"})",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
         }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Requests queued",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 10
               }
             ]
           },
-          "decimals": 0
+          "mappings": []
         },
         "overrides": []
       },
@@ -242,15 +396,31 @@
           "calcs": [
             "lastNotNull"
           ],
-          "values": false
-        }
+          "fields": "",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 4,
         "x": 16,
         "y": 1
       },
+      "id": 7
+    },
+    {
+      "type": "stat",
+      "title": "KV cache",
+      "description": "The best single predictor of queueing: once the cache is full, requests wait no matter how idle the GPU looks.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
       "targets": [
         {
           "refId": "A",
@@ -258,31 +428,37 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum(llm:requests_queued{machine=~\"$machine\"})",
-          "instant": false
+          "expr": "100 * max by (machine) (llm:kv_cache_usage_ratio{machine=~\"$machine\"})",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
         }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Tokens predicted",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
               }
             ]
           },
-          "unit": "tps",
-          "decimals": 2
+          "mappings": [],
+          "unit": "percent",
+          "decimals": 1
         },
         "overrides": []
       },
@@ -291,81 +467,43 @@
           "calcs": [
             "lastNotNull"
           ],
-          "values": false
-        }
+          "fields": "",
+          "values": true
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
       },
       "gridPos": {
-        "h": 4,
+        "h": 5,
         "w": 4,
         "x": 20,
         "y": 1
       },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
-          },
-          "expr": "sum(rate(llm:tokens_predicted_total{machine=~\"$machine\"}[1m]))",
-          "instant": false
-        }
-      ]
+      "id": 8
     },
     {
       "type": "row",
-      "title": "Inference Throughput",
+      "title": "Throughput & Latency",
+      "id": 9,
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 6
       },
-      "panels": [],
-      "id": 101
+      "panels": []
     },
     {
       "type": "timeseries",
-      "title": "Decode throughput (tokens/s)",
+      "title": "Token throughput",
+      "description": "Normalised by server/prometheus/rules/llm.yml. The [1m] rate windows behind these need a client SCRAPE_INTERVAL of 15s or faster \u2014 at the 60s default, rate() has too few samples and the panel stays empty.",
       "datasource": {
         "type": "prometheus",
         "uid": "Prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "tps"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 6,
-        "y": 6
       },
       "targets": [
         {
@@ -376,23 +514,25 @@
           },
           "expr": "llm:decode_tokens_per_second{machine=~\"$machine\"}",
           "instant": false,
-          "legendFormat": "{{machine}}"
+          "range": true,
+          "legendFormat": "{{machine}} decode"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "llm:prompt_tokens_per_second{machine=~\"$machine\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}} prompt"
         }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Prompt throughput (tokens/s)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
+          "color": {
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -403,24 +543,50 @@
               }
             ]
           },
-          "unit": "tps"
+          "mappings": [],
+          "unit": "tps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 7,
+        "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 6
+        "x": 0,
+        "y": 7
+      },
+      "id": 10
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests",
+      "description": "Queued climbing while running is flat means the engine is at its concurrency limit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
       "targets": [
         {
@@ -429,38 +595,27 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "llm:prompt_tokens_per_second{machine=~\"$machine\"}",
+          "expr": "llm:requests_running{machine=~\"$machine\"}",
           "instant": false,
-          "legendFormat": "{{machine}}"
+          "range": true,
+          "legendFormat": "{{machine}} running"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "llm:requests_queued{machine=~\"$machine\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}} queued"
         }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "GPU",
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 13
-      },
-      "panels": [],
-      "id": 102
-    },
-    {
-      "type": "timeseries",
-      "title": "GPU Util %",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
+          "color": {
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -471,24 +626,360 @@
               }
             ]
           },
-          "unit": "percent"
+          "mappings": [],
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 7,
+        "h": 8,
         "w": 12,
-        "x": 14,
-        "y": 14
+        "x": 12,
+        "y": 7
+      },
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Time to first token (p95)",
+      "description": "vLLM only \u2014 llama.cpp exports no latency histograms.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "llm:ttft_seconds_p95{machine=~\"$machine\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 15
+      },
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "Time per output token (p95)",
+      "description": "vLLM only. The inverse of per-request decode speed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "llm:time_per_output_token_seconds_p95{machine=~\"$machine\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 15
+      },
+      "id": 13
+    },
+    {
+      "type": "timeseries",
+      "title": "KV cache usage",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "llm:kv_cache_usage_ratio{machine=~\"$machine\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 90
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 23
+      },
+      "id": 14
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens generated (cumulative rate)",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "sum by (machine) (rate(llm:tokens_predicted_total{machine=~\"$machine\"}[5m]))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "tps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 23
+      },
+      "id": 15
+    },
+    {
+      "type": "row",
+      "title": "GPU",
+      "id": 16,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 31
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Utilisation",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
       "targets": [
         {
@@ -499,23 +990,14 @@
           },
           "expr": "DCGM_FI_DEV_GPU_UTIL{machine=~\"$machine\"}",
           "instant": false,
-          "legendFormat": "{{machine}} {{device}}"
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}}"
         }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "GPU Memory Used (GB)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
+          "color": {
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -526,24 +1008,52 @@
               }
             ]
           },
-          "unit": "decmbytes"
+          "mappings": [],
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 14
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 32
+      },
+      "id": 17
+    },
+    {
+      "type": "timeseries",
+      "title": "VRAM used",
+      "description": "DCGM reports framebuffer memory in MiB; converted to bytes here.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
       "targets": [
         {
@@ -552,25 +1062,27 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "DCGM_FI_DEV_FB_USED{machine=~\"$machine\"} / 1e9",
+          "expr": "DCGM_FI_DEV_FB_USED{machine=~\"$machine\"} * 1024 * 1024",
           "instant": false,
-          "legendFormat": "{{machine}} {{device}}"
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}} used"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "(DCGM_FI_DEV_FB_USED{machine=~\"$machine\"} + DCGM_FI_DEV_FB_FREE{machine=~\"$machine\"}) * 1024 * 1024",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}} total"
         }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "GPU Power (W)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
+          "color": {
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -581,24 +1093,50 @@
               }
             ]
           },
-          "unit": "watt"
+          "mappings": [],
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 21,
-        "y": 21
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 32
+      },
+      "id": 18
+    },
+    {
+      "type": "timeseries",
+      "title": "Power",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
       "targets": [
         {
@@ -609,23 +1147,14 @@
           },
           "expr": "DCGM_FI_DEV_POWER_USAGE{machine=~\"$machine\"}",
           "instant": false,
-          "legendFormat": "{{machine}} {{device}}"
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}}"
         }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "GPU Temp (C)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
+          "color": {
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -636,24 +1165,50 @@
               }
             ]
           },
-          "unit": "celsius"
+          "mappings": [],
+          "unit": "watt",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 21
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 32
+      },
+      "id": 19
+    },
+    {
+      "type": "timeseries",
+      "title": "Temperature",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
       "targets": [
         {
@@ -664,36 +1219,273 @@
           },
           "expr": "DCGM_FI_DEV_GPU_TEMP{machine=~\"$machine\"}",
           "instant": false,
-          "legendFormat": "{{machine}} {{device}}"
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}} core"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "DCGM_FI_DEV_MEMORY_TEMP{machine=~\"$machine\"}",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}} memory"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "celsius",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "id": 20
+    },
+    {
+      "type": "timeseries",
+      "title": "SM clock",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "DCGM_FI_DEV_SM_CLOCK{machine=~\"$machine\"} * 1e6",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "hertz",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "id": 21
+    },
+    {
+      "type": "timeseries",
+      "title": "Throttling",
+      "description": "Throughput below expectation with thermal throttling here is a cooling problem, not a model problem.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "rate(DCGM_FI_DEV_THERMAL_VIOLATION{machine=~\"$machine\"}[5m]) / 1e6",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}} thermal"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "rate(DCGM_FI_DEV_POWER_VIOLATION{machine=~\"$machine\"}[5m]) / 1e6",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}} gpu{{gpu}} power"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "percentunit",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "id": 22
     },
     {
       "type": "row",
       "title": "Host",
+      "id": 23,
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 28
+        "y": 48
       },
-      "panels": [],
-      "id": 103
+      "panels": []
     },
     {
       "type": "timeseries",
-      "title": "Host CPU Util %",
+      "title": "CPU utilisation",
+      "description": "A 5m window, not 1m: tolerant of a slower scrape interval.",
       "datasource": {
         "type": "prometheus",
         "uid": "Prometheus"
       },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "100 - 100 * avg by (machine) (rate(node_cpu_seconds_total{machine=~\"$machine\",mode=\"idle\"}[5m]))",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{machine}}"
+        }
+      ],
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
+          "color": {
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -704,24 +1496,52 @@
               }
             ]
           },
-          "unit": "percent"
+          "mappings": [],
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 5,
-        "y": 29
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 49
+      },
+      "id": 24
+    },
+    {
+      "type": "timeseries",
+      "title": "Memory used",
+      "description": "",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
       "targets": [
         {
@@ -730,25 +1550,16 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "100 - avg by (machine) (rate(node_cpu_seconds_total{machine=~\"$machine\",mode=\"idle\"}[1m])) * 100",
+          "expr": "max by (machine) (node_memory_MemTotal_bytes{machine=~\"$machine\"} - node_memory_MemAvailable_bytes{machine=~\"$machine\"})",
           "instant": false,
+          "range": true,
           "legendFormat": "{{machine}}"
         }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Host Memory Used (GB)",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
-      },
+      ],
       "fieldConfig": {
         "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2
+          "color": {
+            "mode": "palette-classic"
           },
           "thresholds": {
             "mode": "absolute",
@@ -759,24 +1570,50 @@
               }
             ]
           },
-          "unit": "decmbytes"
+          "mappings": [],
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
         "legend": {
           "displayMode": "list",
-          "placement": "bottom"
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
         },
         "tooltip": {
-          "mode": "multi"
+          "mode": "multi",
+          "sort": "desc"
         }
       },
       "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 29
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 49
+      },
+      "id": 25
+    },
+    {
+      "type": "timeseries",
+      "title": "Disk read throughput",
+      "description": "Spikes here during startup are model weights being paged in.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
       },
       "targets": [
         {
@@ -785,37 +1622,83 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "(node_memory_MemTotal_bytes{machine=~\"$machine\"} - node_memory_MemAvailable_bytes{machine=~\"$machine\"}) / 1e9",
+          "expr": "sum by (machine) (rate(node_disk_read_bytes_total{machine=~\"$machine\"}[5m]))",
           "instant": false,
+          "range": true,
           "legendFormat": "{{machine}}"
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [],
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "auto",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 49
+      },
+      "id": 26
     },
     {
       "type": "row",
       "title": "Serving Logs",
+      "id": 27,
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 36
+        "y": 57
       },
-      "panels": [],
-      "id": 104
+      "panels": []
     },
     {
       "type": "logs",
       "title": "Serving container logs",
+      "description": "Containers named in LLM_CONTAINER_1..3 on the client. If this is empty, those names don't match the running containers.",
       "datasource": {
         "type": "loki",
         "uid": "Loki"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 37
       },
       "targets": [
         {
@@ -824,75 +1707,28 @@
             "type": "loki",
             "uid": "Loki"
           },
-          "expr": "{job=\"docker\", machine=~\"$machine\", role=\"serving\"}"
+          "expr": "{job=\"docker\", machine=~\"$machine\", role=\"serving\"}",
+          "queryType": "range",
+          "maxLines": 200
         }
       ],
       "options": {
         "showTime": true,
-        "sortOrder": "Descending",
-        "enableLogDetails": true
-      }
-    }
-  ],
-  "refresh": "5s",
-  "schemaVersion": 39,
-  "tags": [
-    "llm",
-    "inference",
-    "metrics-stack"
-  ],
-  "templating": {
-    "list": [
-      {
-        "name": "machine",
-        "type": "query",
-        "datasource": {
-          "type": "prometheus",
-          "uid": "Prometheus"
-        },
-        "query": {
-          "query": "label_values(up, machine)",
-          "refId": "A"
-        },
-        "definition": "label_values(up, machine)",
-        "label": "Machine",
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "hide": 0,
-        "current": {
-          "text": "All",
-          "value": "$__all"
-        },
-        "sort": 1
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
       },
-      {
-        "name": "container",
-        "type": "query",
-        "datasource": {
-          "type": "loki",
-          "uid": "Loki"
-        },
-        "query": {
-          "query": "label_values({job=\"docker\"}, container)",
-          "refId": "A"
-        },
-        "definition": "label_values({job=\"docker\"}, container)",
-        "label": "Container",
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "hide": 0
-      }
-    ]
-  },
-  "time": {
-    "from": "now-30m",
-    "to": "now"
-  },
-  "timepicker": {},
-  "timezone": "",
-  "title": "Model Inference",
-  "uid": "model-inference",
-  "version": 1
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "id": 28
+    }
+  ]
 }

@@ -1,9 +1,23 @@
-# Server Prometheus: pure receiver.
-# All data arrives via remote_write from client Alloy agents, which stamp
+# Server Prometheus.
+#
+# Fleet data arrives via remote_write from client Alloy agents, which stamp
 # every sample with a `machine` external label.
+#
+# The scrape jobs below cover only THIS machine — the stack's own components
+# and the host they run on. Without them a full disk or a wedged Loki ends
+# collection with nothing to show for it.
 
 global:
+  scrape_interval: 15s
   evaluation_interval: 15s
+
+storage:
+  tsdb:
+    # Client Alloy agents buffer to a WAL and replay it after an outage or a
+    # crash. Those samples are older than the TSDB head and would be rejected
+    # outright with the default (0) window — which would quietly break the
+    # crash-durability the client is built for.
+    out_of_order_time_window: 24h
 
 rule_files:
   - /etc/prometheus/rules/*.yml
@@ -12,3 +26,61 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # `machine: metrics-server` gives the server a name in the same $machine
+  # dropdown as the fleet. Rename it here if you prefer the real hostname.
+  - job_name: node
+    static_configs:
+      - targets: ["host.docker.internal:9100"]
+        labels: { machine: metrics-server }
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels: { machine: metrics-server }
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels: { machine: metrics-server }
+
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+        labels: { machine: metrics-server }
+
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
+        labels: { machine: metrics-server }
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+        labels: { machine: metrics-server }
+
+  # Proxmox VE. Inert until you list a PVE node in targets/pve.json — the file
+  # ships as an empty list, so this job creates no permanent up=0 series on a
+  # server that isn't a Proxmox host.
+  - job_name: pve
+    metrics_path: /pve
+    params:
+      module: [default]
+      cluster: ["1"]
+      node: ["1"]
+    file_sd_configs:
+      # Glob, not a single file: targets/pve.json stays [] and tracked in git,
+      # while your actual node list lives in targets/pve.local.json, which is
+      # gitignored — so `git pull --ff-only` can never conflict with it.
+      - files: ["/etc/prometheus/targets/pve*.json"]
+        refresh_interval: 1m
+    relabel_configs:
+      # The discovered address is the Proxmox node to query; the scrape itself
+      # goes to pve-exporter, which proxies to the PVE API.
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: pve-exporter:9221

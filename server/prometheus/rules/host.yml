@@ -1,0 +1,111 @@
+# Host health. Every rule groups by the `machine` external label so a single
+# rule covers the whole fleet.
+groups:
+  - name: host
+    rules:
+      - alert: FilesystemAlmostFull
+        expr: |
+          100 * (
+            1 - node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}
+                / node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"}
+          ) > 90
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Filesystem {{ $labels.mountpoint }} over 90% full on {{ $labels.machine }}"
+          description: "{{ $labels.mountpoint }} ({{ $labels.device }}) has less than 10% free."
+
+      # Catches slow leaks long before the 90% threshold does.
+      - alert: FilesystemFillingUp
+        expr: |
+          predict_linear(
+            node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}[6h], 24 * 3600
+          ) < 0
+          and on (machine, mountpoint)
+            node_filesystem_avail_bytes{fstype!~"tmpfs|ramfs"}
+            / node_filesystem_size_bytes{fstype!~"tmpfs|ramfs"} < 0.4
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} will fill within 24h on {{ $labels.machine }}"
+          description: "Extrapolating the last 6 hours of growth, {{ $labels.mountpoint }} runs out of space in under a day."
+
+      - alert: HostMemoryPressure
+        expr: |
+          100 * (
+            1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes
+          ) > 92
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory over 92% used on {{ $labels.machine }}"
+          description: "Available memory has been below 8% for 15 minutes; the OOM killer is the next step."
+
+      - alert: HostOomKill
+        expr: |
+          sum by (machine) (increase(loki_process_custom_syslog_oom_total[10m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "OOM kill on {{ $labels.machine }}"
+          description: "The kernel killed a process to reclaim memory. See the Host dashboard's system log panel for which one."
+
+      - alert: HostLoadHigh
+        expr: |
+          node_load15 > 2 * count by (machine) (node_cpu_seconds_total{mode="idle"})
+        for: 20m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Load average is 2x core count on {{ $labels.machine }}"
+          description: "15-minute load has been more than twice the number of CPU cores for 20 minutes."
+
+      - alert: HostSwapThrashing
+        expr: |
+          rate(node_vmstat_pswpin[5m]) + rate(node_vmstat_pswpout[5m]) > 1000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Heavy swap activity on {{ $labels.machine }}"
+          description: "Sustained swap in/out. The host is short of RAM and paging to disk."
+
+      # Counted from the log stream rather than node_systemd_unit_state:
+      # node-exporter's systemd collector needs D-Bus access that AppArmor
+      # denies to containers on stock Ubuntu, so it is off by default.
+      - alert: SystemdUnitFailed
+        expr: |
+          sum by (machine) (increase(loki_process_custom_syslog_unit_failed_total[15m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "systemd unit failure on {{ $labels.machine }}"
+          description: "A unit entered the failed state. `systemctl --failed` on the host, and see the Host dashboard's system log panels for which one."
+
+      - alert: HostRebooted
+        expr: |
+          (node_time_seconds - node_boot_time_seconds) < 600
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "{{ $labels.machine }} rebooted"
+          description: "The host booted less than 10 minutes ago. Expected after maintenance; unexplained here means a crash or power loss — check the RAS panels."
+
+      - alert: NetworkInterfaceErrors
+        expr: |
+          sum by (machine, device) (
+            rate(node_network_receive_errs_total{device!="lo"}[10m])
+            + rate(node_network_transmit_errs_total{device!="lo"}[10m])
+          ) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NIC errors on {{ $labels.machine }} ({{ $labels.device }})"
+          description: "Sustained receive/transmit errors — usually a bad cable, port, or a duplex mismatch."

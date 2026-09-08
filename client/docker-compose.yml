@@ -8,41 +8,51 @@
 #   3. docker compose up -d
 #
 # What it runs:
-#   alloy          Grafana Alloy agent: tails syslog + container logs, scrapes
-#                  all local exporters, buffers on disk (WALs) and ships to
-#                  the server. Survives crashes: unsent data replays on reboot.
-#   node-exporter  host CPU/RAM/disk/net/hwmon/EDAC
-#   dcgm-exporter  NVIDIA GPU metrics        (profile: gpu)
-#   ras-exporter   hardware RAS errors from rasdaemon (CE/UE per DIMM)
-#                                   (profile: ras)
+#   alloy               Grafana Alloy agent: reads the journal (or /var/log/*),
+#                       tails container logs, scrapes every local exporter,
+#                       buffers on disk (WALs) and ships to the server.
+#   node-exporter       host CPU/RAM/disk/net/hwmon/EDAC/systemd  (host netns)
+#   cadvisor            per-container CPU/mem/net/io/restarts
+#   dcgm-exporter       NVIDIA GPU metrics incl. ECC/XID   (profile: gpu)
+#   ras-exporter        memory RAS errors from rasdaemon   (profile: ras)
+#   smartctl-exporter   SMART/NVMe disk health             (profile: smart)
 #
-# .env knobs:
-#   MACHINE           machine name stamped on all data (e.g. pensive)
-#   SERVER_LOKI_URL   http://<server>:3100/loki/api/v1/push
-#   SERVER_PROM_URL   http://<server>:9090/api/v1/write
-#   COMPOSE_PROFILES  e.g. "gpu,ras"
-#   LLM_TARGET_1..3   optional LLM endpoints via host-gateway (blank = off)
+# .env knobs: see .env.example
 # =============================================================================
 
 name: metrics-stack-client
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   alloy:
     image: grafana/alloy:latest
     container_name: metrics-stack-client-alloy
+    # Root is required to read the journal, /var/log/syslog (0640 root:adm)
+    # and the docker socket. The upstream image otherwise runs as uid 473.
+    user: root
     entrypoint: ["/bin/sh", "/etc/alloy/entrypoint.sh"]
     command:
       - run
       - --storage.path=/var/lib/alloy
       - --server.http.listen-addr=0.0.0.0:12345
       # WAL for loki.write requires experimental. (prometheus.remote_write's
-      # WAL is always on; the syslog/docker pipelines and scrapes are GA.)
+      # WAL is always on; the log pipelines and scrapes are GA.)
       - --stability.level=experimental
       - /etc/alloy/config.alloy
     environment:
       - MACHINE=${MACHINE:?set MACHINE in .env}
       - SERVER_LOKI_URL=${SERVER_LOKI_URL:?set SERVER_LOKI_URL in .env}
       - SERVER_PROM_URL=${SERVER_PROM_URL:?set SERVER_PROM_URL in .env}
+      # Mirrors COMPOSE_PROFILES so the agent only creates scrape jobs for
+      # exporters that are actually running (avoids permanent up=0 series).
+      - ENABLED_PROFILES=${COMPOSE_PROFILES:-}
+      - SCRAPE_INTERVAL=${SCRAPE_INTERVAL:-15s}
+      - LOG_SOURCE=${LOG_SOURCE:-auto}
       - LLM_TARGET_1=${LLM_TARGET_1:-}
       - LLM_TARGET_2=${LLM_TARGET_2:-}
       - LLM_TARGET_3=${LLM_TARGET_3:-}
@@ -56,35 +66,91 @@ services:
       - ./alloy:/etc/alloy:ro
       # Durable state: log positions + WALs (crash-safe replay).
       - alloy-data:/var/lib/alloy
+      # Logs: journald (persistent + volatile) and plaintext fallback.
       - /var/log:/var/log:ro
+      - /run/log/journal:/run/log/journal:ro
+      - /etc/machine-id:/etc/machine-id:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "12345:12345"
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - client-net
 
   node-exporter:
     image: prom/node-exporter:latest
     container_name: metrics-stack-client-node-exporter
-    command:
-      - --path.rootfs=/host
-      - --collector.systemd
+    # host netns is REQUIRED: /proc/net/* is namespace-scoped, so on a bridge
+    # network every node_network_*/netstat/sockstat/conntrack metric would
+    # describe the container's veth instead of the host's interfaces.
+    network_mode: host
     pid: host
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/host
+      - --path.udev.data=/host/run/udev/data
+      - --collector.processes
+      - --collector.interrupts
+      - --collector.tcpstat
+      - --collector.mountstats
+      - --collector.cpu.info
+      # Container/virtual filesystems would otherwise flood node_filesystem_*.
+      - --collector.filesystem.mount-points-exclude=^/(dev|proc|sys|run/(user|credentials/.+)|var/lib/docker/.+|var/lib/kubelet/.+|snap/.+)($$|/)
+      - --collector.filesystem.fs-types-exclude=^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$$
     volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
       - /:/host:ro,rslave
+      - /run/udev/data:/host/run/udev/data:ro
+      # --collector.systemd (node_systemd_unit_state) is deliberately NOT
+      # enabled: it needs the D-Bus system bus, and stock AppArmor policy on
+      # Ubuntu denies a container that access — the collector then logs an
+      # error on every single scrape. Failed units are tracked from the
+      # journal instead (syslog_unit_failed_total), which needs no privileges
+      # and works on every distro. To use the collector anyway, add
+      # `--collector.systemd` above, uncomment the mount below, and expect to
+      # need an AppArmor exception on Ubuntu:
+      #- /run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket
     restart: unless-stopped
+    logging: *default-logging
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:latest
+    container_name: metrics-stack-client-cadvisor
+    command:
+      - --docker_only=true
+      - --store_container_labels=false
+      - --housekeeping_interval=15s
+      - --disable_metrics=percpu,sched,tcp,udp,advtcp,process,hugetlb,referenced_memory,cpu_topology,resctrl
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    restart: unless-stopped
+    logging: *default-logging
     networks:
       - client-net
 
   dcgm-exporter:
-    image: nvidia/dcgm-exporter:latest
+    image: ${DCGM_IMAGE:-nvidia/dcgm-exporter:latest}
     container_name: metrics-stack-client-dcgm-exporter
     profiles: ["gpu"]
-    runtime: nvidia
+    # NOTE: no `runtime: nvidia`. The device reservation below is the portable
+    # form — it works with both the legacy nvidia runtime and CDI-only hosts.
+    command: ["-f", "/etc/dcgm-exporter/counters.csv"]
+    cap_add:
+      - SYS_ADMIN          # required for DCP/profiling fields
     environment:
       - DCGM_EXPORTER_INTERVAL=2000
     volumes:
+      - ./dcgm/counters.csv:/etc/dcgm-exporter/counters.csv:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     deploy:
       resources:
@@ -94,6 +160,7 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+    logging: *default-logging
     networks:
       - client-net
 
@@ -108,6 +175,21 @@ services:
       - ./ras-exporter/exporter.py:/exporter.py:ro
       - /var/lib/rasdaemon:/var/lib/rasdaemon:ro
     restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - client-net
+
+  smartctl-exporter:
+    image: prometheuscommunity/smartctl-exporter:latest
+    container_name: metrics-stack-client-smartctl-exporter
+    profiles: ["smart"]
+    # Raw device access is required to issue SMART/NVMe admin commands.
+    privileged: true
+    user: root
+    volumes:
+      - /dev:/dev:ro
+    restart: unless-stopped
+    logging: *default-logging
     networks:
       - client-net
 

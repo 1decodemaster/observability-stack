@@ -1,1 +1,11 @@
+# Per-machine configuration and credentials — never committed, and kept out of
+# git so `git pull --ff-only` can never conflict with a local edit.
 client/.env
+server/.env
+
+# Proxmox API token.
+server/pve/pve.yml
+
+# Your actual PVE node list. The tracked targets/pve.json stays [] ;
+# prometheus.yml globs targets/pve*.json so this one is picked up too.
+server/prometheus/targets/pve.local.json

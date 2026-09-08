@@ -1,0 +1,15 @@
+# Credentials for prometheus-pve-exporter. Copy to pve.yml (gitignored).
+#
+# Create a read-only API token on the Proxmox host first:
+#
+#   pveum user add prometheus@pve
+#   pveum aclmod / -user prometheus@pve -role PVEAuditor
+#   pveum user token add prometheus@pve monitoring --privsep 0
+#
+# The token add command prints the secret exactly once — paste it below.
+default:
+  user: prometheus@pve
+  token_name: monitoring
+  token_value: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  # Set to true only if the PVE host has a certificate your container trusts.
+  verify_ssl: false

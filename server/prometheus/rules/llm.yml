@@ -1,9 +1,13 @@
 # Recording rules that map backend-specific metric families (vllm:*, llamacpp:*)
-# onto a single, model-agnostic `llm:*` namespace, per machine.
+# onto a single, model-agnostic `llm:*` namespace, per machine — plus alerts on
+# the normalised names, so they hold whichever engine a host runs.
 #
 # `or on(machine)` semantics: if a machine isn't running a given backend its
 # side yields no series and the other backend's value is used, so the
 # dashboard reflects whichever serving engine is up on each machine.
+#
+# The [1m] rate windows require a client SCRAPE_INTERVAL of 15s or faster —
+# rate() needs at least two samples inside the window.
 groups:
   - name: llm_normalized
     interval: 15s
@@ -37,3 +41,67 @@ groups:
         expr: |
           sum by (machine) (vllm:generation_tokens_total)
           or on(machine) sum by (machine) (llamacpp:tokens_predicted_total)
+
+      # KV cache occupancy as a 0..1 ratio. The single best predictor of
+      # queueing: once the cache is full, requests wait regardless of GPU load.
+      - record: llm:kv_cache_usage_ratio
+        expr: |
+          max by (machine) (vllm:gpu_cache_usage_perc)
+          or on(machine) max by (machine) (llamacpp:kv_cache_usage_ratio)
+
+      # Latency percentiles (vLLM only — llama.cpp exports no histograms).
+      - record: llm:ttft_seconds_p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (machine, le) (rate(vllm:time_to_first_token_seconds_bucket[5m]))
+          )
+
+      - record: llm:time_per_output_token_seconds_p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (machine, le) (rate(vllm:time_per_output_token_seconds_bucket[5m]))
+          )
+
+  - name: llm_alerts
+    rules:
+      # Only fires for a machine that has an LLM target configured at all —
+      # hosts with no LLM_TARGET_* have no `up{job="llm"}` series.
+      - alert: LlmBackendDown
+        expr: up{job="llm"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM backend down on {{ $labels.machine }}"
+          description: "The serving endpoint {{ $labels.instance }} has not answered a metrics scrape for 5 minutes."
+
+      - alert: LlmQueueBacklog
+        expr: llm:requests_queued > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} requests queued on {{ $labels.machine }}"
+          description: "Requests have been waiting for 10 minutes — the engine is saturated. Check KV cache occupancy and GPU utilisation."
+
+      - alert: LlmKvCacheSaturated
+        expr: llm:kv_cache_usage_ratio > 0.95
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "KV cache over 95% on {{ $labels.machine }}"
+          description: "The engine will start preempting or queueing requests. Reduce max concurrent sequences or context length."
+
+      - alert: LlmStalled
+        expr: |
+          llm:requests_running > 0
+          and on (machine) llm:decode_tokens_per_second == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM serving stalled on {{ $labels.machine }}"
+          description: "Requests are marked running but no tokens have been generated for 10 minutes. The engine is likely wedged."

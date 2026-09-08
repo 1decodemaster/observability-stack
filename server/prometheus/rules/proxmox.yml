@@ -1,0 +1,47 @@
+# Proxmox VE (server `pve` profile). Guest state plus the storage pools that
+# usually hold both the guests and this stack's own volumes.
+groups:
+  - name: proxmox
+    rules:
+      - alert: PveGuestStopped
+        expr: |
+          pve_up{id=~"(qemu|lxc)/.*"} == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxmox guest {{ $labels.id }} is not running"
+          description: "The VM or container has been stopped for 10 minutes. Expected if you stopped it deliberately."
+
+      - alert: PveStorageAlmostFull
+        expr: |
+          100 * pve_disk_usage_bytes{id=~"storage/.*"}
+            / (pve_disk_size_bytes{id=~"storage/.*"} > 0) > 90
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Proxmox storage {{ $labels.id }} over 90% full"
+          description: "A full PVE storage stops guests from writing — including the volumes backing this stack."
+
+      - alert: PveStorageFillingUp
+        expr: |
+          predict_linear(pve_disk_usage_bytes{id=~"storage/.*"}[6h], 7 * 24 * 3600)
+            > on (id) group_left pve_disk_size_bytes{id=~"storage/.*"}
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxmox storage {{ $labels.id }} will fill within a week"
+          description: "Extrapolating the last 6 hours of growth. Prune backups/snapshots or add capacity."
+
+      - alert: PveNodeMemoryPressure
+        expr: |
+          100 * pve_memory_usage_bytes{id=~"node/.*"}
+            / (pve_memory_size_bytes{id=~"node/.*"} > 0) > 92
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Proxmox node {{ $labels.id }} memory over 92%"
+          description: "Little headroom left for guests; new VMs will fail to start."

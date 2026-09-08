@@ -1,0 +1,89 @@
+# Collection health: is the pipeline itself still working?
+#
+# On a fleet this is the most important question there is — every other alert
+# in this directory is silently disarmed when an agent stops shipping, because
+# "no data" never fires a threshold rule. These rules watch for that directly.
+groups:
+  - name: collection
+    rules:
+      # A target the client agent knows about stopped responding. Client Alloy
+      # only creates jobs for exporters that are enabled, so an up=0 here means
+      # a real failure and not "this host has no GPU".
+      - alert: ExporterDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Exporter {{ $labels.job }} down on {{ $labels.machine }}"
+          description: "Target {{ $labels.instance }} (job {{ $labels.job }}) has failed to scrape for 5 minutes."
+
+      # The whole machine went away: no `up` series at all any more. `up == 0`
+      # cannot catch this, because a machine that stops shipping stops
+      # producing the series the rule would evaluate.
+      # The `up` series itself vanishes 5 minutes after the last sample
+      # (staleness), so anything built on the live series — `up == 0`,
+      # `time() - timestamp(up)` — can never detect this. A range selector
+      # still sees the raw samples, so compare "seen in the last 24h" against
+      # "present right now". Auto-resolves 24h after the machine's last sample.
+      - alert: MachineStoppedReporting
+        expr: |
+          max by (machine) (max_over_time(up[24h])) == 1
+          unless
+          max by (machine) (up)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.machine }} stopped reporting"
+          description: "No metrics have arrived from {{ $labels.machine }} for over 5 minutes. The host, its Alloy agent, or the network path to the server is down."
+
+      # Alloy is failing to hand samples to the server. The client buffers to
+      # its WAL, so nothing is lost yet — but it will be once the WAL ages out.
+      - alert: AgentRemoteWriteFailing
+        expr: |
+          sum by (machine) (rate(prometheus_remote_storage_samples_failed_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Alloy remote_write failing on {{ $labels.machine }}"
+          description: "The agent has been unable to deliver metric samples for 10 minutes. Data is buffering in the local WAL. Check network reachability of the Prometheus endpoint and the server's ingestion rate."
+
+      # The WAL is falling behind: the agent is reading samples out of its WAL
+      # more slowly than it writes them. Sustained, this ends in data loss.
+      - alert: AgentWriteBacklogGrowing
+        expr: |
+          max by (machine) (prometheus_remote_storage_highest_timestamp_in_seconds)
+          - max by (machine) (prometheus_remote_storage_queue_highest_sent_timestamp_seconds)
+            > 600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Metric write backlog on {{ $labels.machine }}"
+          description: "The agent is more than 10 minutes behind on shipping metrics and has been for 15 minutes."
+
+      # Loki is rejecting what the agent sends (usually: entry too old, rate
+      # limit, or a label-cardinality limit). These are dropped, not buffered.
+      - alert: AgentLogsDropped
+        expr: |
+          sum by (machine) (rate(loki_write_dropped_entries_total[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Log entries being dropped on {{ $labels.machine }}"
+          description: "The agent's Loki client is discarding entries. Check Alloy's own logs for the rejection reason (commonly `entry too far behind` or an ingestion rate limit)."
+
+      # Host logs stopped even though the machine is still shipping metrics.
+      # Usually a broken journal mount or a rotated-away syslog file.
+      - alert: HostLogsStopped
+        expr: |
+          sum by (machine) (rate(loki_process_custom_syslog_lines_total[30m])) == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No host log lines from {{ $labels.machine }} for 90m"
+          description: "The machine is still sending metrics but has produced no system log lines. Check the agent's chosen log transport (`docker logs metrics-stack-client-alloy | head`) — journald and /var/log/syslog may both be unavailable."

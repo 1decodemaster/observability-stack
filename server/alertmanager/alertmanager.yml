@@ -1,20 +1,53 @@
-# No notification channel configured yet — alerts evaluate and are visible
-# in Prometheus (/alerts) and Grafana (Alerts). To wire one up, add a
-# receiver, e.g.:
+# No notification channel is configured yet: the default route drops
+# everything into a "null" receiver. Alerts still evaluate and are visible in
+# Prometheus (/alerts) and Grafana (Alerts) — they just don't page anyone.
 #
-#   route:
-#     receiver: webhook
-#     group_by: [machine, alertname]
-#     group_wait: 30s
-#     repeat_interval: 4h
+# To wire up a channel, replace the `null` receiver below with a real one and
+# point the route at it, e.g.:
 #
 #   receivers:
+#     - name: telegram
+#       telegram_configs:
+#         - bot_token: "..."
+#           chat_id: 123456789
 #     - name: webhook
 #       webhook_configs:
 #         - url: http://example.com/hooks/alerts
 #
+# then `docker compose up -d alertmanager`.
+
 route:
   receiver: "null"
+  # Group by machine first: when a host goes down every one of its exporters
+  # alerts at once, and that should arrive as one notification, not twelve.
+  group_by: [machine, alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 12h
+
+  routes:
+    # Informational rules (reboots, CPU throttling) are worth seeing in the UI
+    # but should never wake anyone up.
+    - matchers: [severity = "info"]
+      receiver: "null"
+      group_wait: 5m
+      repeat_interval: 24h
+
+inhibit_rules:
+  # A machine that stopped reporting will also trip every exporter-down and
+  # threshold rule it owns. Suppress those; the root cause is the one alert.
+  - source_matchers: [alertname = "MachineStoppedReporting"]
+    target_matchers: [severity =~ "critical|warning|info"]
+    equal: [machine]
+
+  # Likewise, a down stack component explains the collection alerts around it.
+  - source_matchers: [alertname = "StackComponentDown"]
+    target_matchers: [alertname =~ "AgentRemoteWriteFailing|AgentLogsDropped|AgentWriteBacklogGrowing"]
+
+  # Critical supersedes warning for the same alert on the same machine.
+  - source_matchers: [severity = "critical"]
+    target_matchers: [severity = "warning"]
+    equal: [machine, alertname]
 
 receivers:
   - name: "null"

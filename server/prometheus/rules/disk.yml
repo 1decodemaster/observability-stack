@@ -1,0 +1,51 @@
+# SMART / NVMe disk health (client `smart` profile). Memory RAS without disk
+# RAS leaves the other half of the storage path unwatched.
+groups:
+  - name: disk
+    rules:
+      - alert: SmartDeviceFailing
+        expr: smartctl_device_smart_status == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SMART overall health FAILED on {{ $labels.machine }} ({{ $labels.device }})"
+          description: "The drive reports it is failing. Replace it. `smartctl -a {{ $labels.device }}` on the host for details."
+
+      - alert: NvmeMediaErrors
+        expr: |
+          increase(smartctl_device_media_errors[24h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVMe media errors on {{ $labels.machine }} ({{ $labels.device }})"
+          description: "The controller logged unrecovered data-integrity errors in the last 24h."
+
+      - alert: NvmeWearoutHigh
+        expr: smartctl_device_percentage_used > 85
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "NVMe at {{ $value }}% of rated endurance on {{ $labels.machine }} ({{ $labels.device }})"
+          description: "The drive is approaching its write-endurance limit. Plan a replacement."
+
+      - alert: SmartReallocatedSectors
+        expr: |
+          increase(smartctl_device_attribute{attribute_name="Reallocated_Sector_Ct", attribute_value_type="raw"}[24h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "New reallocated sectors on {{ $labels.machine }} ({{ $labels.device }})"
+          description: "The drive remapped additional bad sectors in the last 24h — a spinning disk in decline."
+
+      - alert: DiskTempHigh
+        expr: smartctl_device_temperature{temperature_type="current"} > 65
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk over 65C on {{ $labels.machine }} ({{ $labels.device }})"
+          description: "Sustained high drive temperature shortens service life; check chassis airflow."

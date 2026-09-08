@@ -1,0 +1,47 @@
+# Container health (cAdvisor). Runs on every client and on the server itself.
+groups:
+  - name: containers
+    rules:
+      - alert: ContainerRestartLoop
+        expr: |
+          increase(container_start_time_seconds{name!=""}[30m]) > 0
+          and on (machine, name)
+            changes(container_start_time_seconds{name!=""}[30m]) > 3
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} restarting on {{ $labels.machine }}"
+          description: "More than 3 restarts in 30 minutes — the container is crash-looping."
+
+      - alert: ContainerOomKilled
+        expr: |
+          increase(container_oom_events_total{name!=""}[15m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} OOM-killed on {{ $labels.machine }}"
+          description: "The container exceeded its memory limit and was killed. Raise the limit or fix the leak."
+
+      - alert: ContainerNearMemoryLimit
+        expr: |
+          100 * container_memory_working_set_bytes{name!=""}
+            / (container_spec_memory_limit_bytes{name!=""} > 0) > 90
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} over 90% of its memory limit on {{ $labels.machine }}"
+          description: "An OOM kill is likely next."
+
+      - alert: ContainerCpuThrottled
+        expr: |
+          100 * rate(container_cpu_cfs_throttled_periods_total{name!=""}[15m])
+            / (rate(container_cpu_cfs_periods_total{name!=""}[15m]) > 0) > 50
+        for: 20m
+        labels:
+          severity: info
+        annotations:
+          summary: "Container {{ $labels.name }} CPU-throttled on {{ $labels.machine }}"
+          description: "More than half of scheduling periods were throttled by the CPU quota."

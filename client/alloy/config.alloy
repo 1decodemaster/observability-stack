@@ -1,10 +1,16 @@
 // Grafana Alloy client configuration.
 //
-// Environment (from client/.env via docker compose):
+// Environment (from client/.env via docker compose, plus values computed by
+// entrypoint.sh):
 //   MACHINE           machine name; stamped onto every stream and sample
 //   SERVER_LOKI_URL   e.g. http://homelab:3100/loki/api/v1/push
 //   SERVER_PROM_URL   e.g. http://homelab:9090/api/v1/write
-//   LLM_TARGET_1..3   LLM serving endpoints (blank = disabled)
+//   SCRAPE_INTERVAL   scrape period for every job (default 15s)
+//   JOURNAL_PATH      journal directory, or an empty dir when unused  (entrypoint)
+//   SYSLOG_GLOB       plaintext syslog file, or a non-existent path   (entrypoint)
+//
+// entrypoint.sh also writes /var/lib/alloy/targets/*.json — one file-SD file
+// per exporter, empty when that exporter is not enabled.
 
 // ---------------------------------------------------------------------------
 // Forwarding
@@ -32,27 +38,78 @@ prometheus.remote_write "server" {
     url = sys.env("SERVER_PROM_URL")
   }
   // WAL is built in: unsent metrics buffer on disk and replay after restart.
+  // NOTE: the server must set storage.tsdb.out_of_order_time_window, otherwise
+  // Prometheus rejects the replayed (older-than-head) samples on reconnect.
   wal {
     max_keepalive_time = "24h"
   }
 }
 
 // ---------------------------------------------------------------------------
-// Logs: host syslog
+// Logs: host system journal (preferred transport)
 // ---------------------------------------------------------------------------
 
-loki.source.file "syslog" {
-  targets = [
-    {
-      __path__ = "/var/log/syslog",
-      job      = "syslog",
-    },
-  ]
-  forward_to = [loki.process.syslog.receiver]
+// Journal fields arrive as __journal_<field lowercased>. Promote the few that
+// are worth a Loki label; everything else stays in the line.
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal_syslog_identifier"]
+    target_label  = "program"
+  }
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "host"
+  }
 }
 
-loki.process "syslog" {
-  forward_to = [loki.write.server.receiver]
+// JOURNAL_PATH points at an empty directory when the plaintext transport was
+// chosen, so this component simply produces nothing.
+loki.source.journal "system" {
+  path          = sys.env("JOURNAL_PATH")
+  max_age       = "12h"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = {
+    job       = "syslog",
+    transport = "journal",
+  }
+  forward_to = [loki.process.system.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// Logs: host syslog file (fallback for hosts without a journal)
+// ---------------------------------------------------------------------------
+
+// SYSLOG_GLOB is a path that does not exist when journald is in use;
+// local.file_match then yields no targets.
+local.file_match "syslog" {
+  path_targets = [
+    {
+      __path__  = sys.env("SYSLOG_GLOB"),
+      job       = "syslog",
+      transport = "file",
+    },
+  ]
+  sync_period = "1m"
+}
+
+loki.source.file "syslog" {
+  targets    = local.file_match.syslog.targets
+  forward_to = [loki.process.syslog_file.receiver]
+}
+
+// Parse the plaintext line into the same shape the journal already provides.
+loki.process "syslog_file" {
+  forward_to = [loki.process.system.receiver]
 
   // Parse both RFC3339 (rsyslog default) and legacy BSD syslog lines:
   //   "2026-08-28T01:58:14.09+00:00 pensive dockerd[5565]: ..."
@@ -72,11 +129,32 @@ loki.process "syslog" {
       program = "",
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Logs: shared counters for both host-log transports
+// ---------------------------------------------------------------------------
+
+// Both transports land here so the syslog_* counters (and therefore the
+// dashboards and alerts built on them) are identical on every distro.
+loki.process "system" {
+  forward_to = [loki.write.server.receiver]
+
+  // loki.source.journal stamps its own `job` label (the component ID) over
+  // whatever its `labels` argument asked for, so journal streams arrive as
+  // job="loki.source.journal.system". Pin it here, before the selectors below
+  // and before the streams reach Loki — every stage.match, dashboard panel and
+  // alert in this stack keys off {job="syslog"}.
+  stage.static_labels {
+    values = {
+      job = "syslog",
+    }
+  }
 
   stage.metrics {
     metric.counter {
       name        = "syslog_lines_total"
-      description = "total syslog lines ingested"
+      description = "total system log lines ingested"
       match_all   = true
       action      = "inc"
     }
@@ -87,7 +165,7 @@ loki.process "syslog" {
     stage.metrics {
       metric.counter {
         name        = "syslog_errors_total"
-        description = "syslog lines matching error/fatal/crash patterns"
+        description = "system log lines matching error/fatal/crash patterns"
         match_all   = true
         action      = "inc"
       }
@@ -99,7 +177,34 @@ loki.process "syslog" {
     stage.metrics {
       metric.counter {
         name        = "syslog_mce_total"
-        description = "syslog lines matching hardware RAS / MCE patterns"
+        description = "system log lines matching hardware RAS / MCE patterns"
+        match_all   = true
+        action      = "inc"
+      }
+    }
+  }
+
+  // systemd unit failures, taken from the log stream rather than from
+  // node-exporter's systemd collector: that collector needs D-Bus access,
+  // which AppArmor denies to containers on stock Ubuntu.
+  stage.match {
+    selector = "{job=\"syslog\"} |~ \"(?i)(entered failed state|failed with result|failed to start)\""
+    stage.metrics {
+      metric.counter {
+        name        = "syslog_unit_failed_total"
+        description = "system log lines reporting a systemd unit failure"
+        match_all   = true
+        action      = "inc"
+      }
+    }
+  }
+
+  stage.match {
+    selector = "{job=\"syslog\"} |~ \"(?i)(out of memory|oom-kill|oom_reaper|killed process)\""
+    stage.metrics {
+      metric.counter {
+        name        = "syslog_oom_total"
+        description = "system log lines indicating an OOM kill"
         match_all   = true
         action      = "inc"
       }
@@ -112,11 +217,12 @@ loki.process "syslog" {
 // ---------------------------------------------------------------------------
 
 discovery.docker "containers" {
-  host = "unix:///var/run/docker.sock"
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "30s"
 }
 
 // Extract a clean `container` label from the Docker container name
-// ("__metrics-stack-client-alloy" -> "metrics-stack-client-alloy").
+// ("/metrics-stack-client-alloy" -> "metrics-stack-client-alloy").
 // `__`-prefixed labels are dropped automatically from the final log streams.
 // Containers named in LLM_CONTAINER_1..3 (.env) are tagged role="serving" so
 // dashboards can show the LLM serving engine's logs specifically.
@@ -127,6 +233,10 @@ discovery.relabel "containers" {
     source_labels = ["__meta_docker_container_name"]
     regex         = "/(.*)"
     target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
   }
   rule {
     source_labels = ["container"]
@@ -160,51 +270,112 @@ loki.source.docker "containers" {
 // ---------------------------------------------------------------------------
 // Metrics
 // ---------------------------------------------------------------------------
+//
+// Every job is driven by a file-SD file written by entrypoint.sh. A disabled
+// exporter's file is `[]`, so no target — and no misleading up=0 series.
+
+discovery.file "node" {
+  files = ["/var/lib/alloy/targets/node.json"]
+}
+discovery.file "cadvisor" {
+  files = ["/var/lib/alloy/targets/cadvisor.json"]
+}
+discovery.file "dcgm" {
+  files = ["/var/lib/alloy/targets/dcgm.json"]
+}
+discovery.file "ras" {
+  files = ["/var/lib/alloy/targets/ras.json"]
+}
+discovery.file "smart" {
+  files = ["/var/lib/alloy/targets/smart.json"]
+}
+discovery.file "llm" {
+  files = ["/var/lib/alloy/targets/llm.json"]
+}
 
 prometheus.scrape "host" {
-  targets = [
-    {
-      __address__ = "node-exporter:9100",
-      job         = "node",
-    },
-  ]
+  targets         = discovery.file.node.targets
+  scrape_interval = sys.env("SCRAPE_INTERVAL")
+  forward_to      = [prometheus.relabel.node.receiver]
+}
+
+// node_uname_info ships its own machine="<cpu arch>" label, which wins over
+// the remote_write external label and would otherwise make the series
+// unusable for a fleet inventory (and pollute the $machine dropdown).
+// Move the arch to its own label and restore the real machine name.
+prometheus.relabel "node" {
   forward_to = [prometheus.remote_write.server.receiver]
+
+  rule {
+    source_labels = ["__name__", "machine"]
+    separator     = ";"
+    regex         = "node_uname_info;(.+)"
+    target_label  = "arch"
+    replacement   = "$1"
+  }
+  rule {
+    source_labels = ["__name__"]
+    regex         = "node_uname_info"
+    target_label  = "machine"
+    replacement   = sys.env("MACHINE")
+  }
+}
+
+prometheus.scrape "containers" {
+  targets         = discovery.file.cadvisor.targets
+  scrape_interval = sys.env("SCRAPE_INTERVAL")
+  forward_to      = [prometheus.relabel.cadvisor.receiver]
+}
+
+// cAdvisor emits one series per container per cgroup dimension; drop the
+// families no dashboard or alert here uses, to keep remote_write and the
+// server's TSDB small on a fleet.
+prometheus.relabel "cadvisor" {
+  forward_to = [prometheus.remote_write.server.receiver]
+
+  rule {
+    source_labels = ["__name__"]
+    regex         = "container_(blkio_device_usage_total|memory_mapped_file|memory_swap|file_descriptors|threads_max|ulimits_soft|sockets|memory_max_usage_bytes|spec_cpu_(period|shares)|spec_memory_(reservation|swap)_limit_bytes)"
+    action        = "drop"
+  }
+  // Pseudo-containers for the root cgroup duplicate node-exporter's data.
+  rule {
+    source_labels = ["id"]
+    regex         = "/"
+    action        = "drop"
+  }
 }
 
 prometheus.scrape "gpu" {
-  targets = [
-    {
-      __address__ = "dcgm-exporter:9400",
-      job         = "dcgm",
-    },
-  ]
-  forward_to = [prometheus.remote_write.server.receiver]
+  targets         = discovery.file.dcgm.targets
+  scrape_interval = sys.env("SCRAPE_INTERVAL")
+  forward_to      = [prometheus.remote_write.server.receiver]
 }
 
 prometheus.scrape "ras" {
-  targets = [
-    {
-      __address__ = "ras-exporter:9108",
-      job         = "ras",
-    },
-  ]
-  forward_to = [prometheus.remote_write.server.receiver]
+  targets         = discovery.file.ras.targets
+  scrape_interval = sys.env("SCRAPE_INTERVAL")
+  forward_to      = [prometheus.remote_write.server.receiver]
+}
+
+prometheus.scrape "smart" {
+  targets         = discovery.file.smart.targets
+  scrape_interval = sys.env("SCRAPE_INTERVAL")
+  forward_to      = [prometheus.remote_write.server.receiver]
 }
 
 // LLM serving backends (LLM_TARGET_1..3 in .env, e.g.
-// "host.docker.internal:8000"). entrypoint.sh materializes the non-blank
-// slots into llm-targets.json (Prometheus file-SD format); blank = disabled.
-discovery.file "llm" {
-  files = ["/var/lib/alloy/llm-targets.json"]
-}
-
+// "host.docker.internal:8000"); blank slots are omitted by entrypoint.sh.
 prometheus.scrape "llm" {
-  targets    = discovery.file.llm.targets
-  forward_to = [prometheus.remote_write.server.receiver]
+  targets         = discovery.file.llm.targets
+  scrape_interval = sys.env("SCRAPE_INTERVAL")
+  forward_to      = [prometheus.remote_write.server.receiver]
 }
 
-// Self-monitoring: Alloy telemetry + the loki.process stage.metrics counters
-// (loki_process_custom_syslog_*_total).
+// Self-monitoring: Alloy telemetry (remote_write queue depth, WAL lag, send
+// failures) plus the loki.process stage.metrics counters
+// (loki_process_custom_syslog_*_total). This is what the Collection Health
+// dashboard and the "client stopped shipping" alerts are built on.
 prometheus.scrape "alloy" {
   targets = [
     {
@@ -212,5 +383,6 @@ prometheus.scrape "alloy" {
       job         = "alloy",
     },
   ]
-  forward_to = [prometheus.remote_write.server.receiver]
+  scrape_interval = sys.env("SCRAPE_INTERVAL")
+  forward_to      = [prometheus.remote_write.server.receiver]
 }
