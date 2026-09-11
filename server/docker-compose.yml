@@ -19,7 +19,7 @@ name: metrics-stack-server
 
 services:
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.7.7
     container_name: metrics-stack-server-loki
     command: -config.file=/etc/loki/loki-config.yml
     volumes:
@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.14.0
     container_name: metrics-stack-server-prometheus
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -46,7 +46,7 @@ services:
     restart: unless-stopped
 
   alertmanager:
-    image: prom/alertmanager:latest
+    image: prom/alertmanager:v0.34.0
     container_name: metrics-stack-server-alertmanager
     volumes:
       - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
@@ -58,7 +58,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2.1
     container_name: metrics-stack-server-grafana
     environment:
       - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}

@@ -11,7 +11,7 @@
 #   alloy          Grafana Alloy agent: tails syslog + container logs, scrapes
 #                  all local exporters, buffers on disk (WALs) and ships to
 #                  the server. Survives crashes: unsent data replays on reboot.
-#   node-exporter  host CPU/RAM/disk/net/hwmon/EDAC
+#   node-exporter  host CPU/RAM/disk/net/hwmon/EDAC/systemd units
 #   dcgm-exporter  NVIDIA GPU metrics        (profile: gpu)
 #   ras-exporter   hardware RAS errors from rasdaemon (CE/UE per DIMM)
 #                                   (profile: ras)
@@ -28,7 +28,7 @@ name: metrics-stack-client
 
 services:
   alloy:
-    image: grafana/alloy:latest
+    image: grafana/alloy:v1.19.2
     container_name: metrics-stack-client-alloy
     entrypoint: ["/bin/sh", "/etc/alloy/entrypoint.sh"]
     command:
@@ -65,11 +65,25 @@ services:
       - client-net
 
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.12.1
     container_name: metrics-stack-client-node-exporter
     command:
       - --path.rootfs=/host
       - --collector.systemd
+    environment:
+      # --collector.systemd talks to systemd over the D-Bus system bus. The
+      # socket is already reachable through the /host bind mount below, so
+      # just point the exporter at it (no extra mount needed). On distros
+      # without systemd/dbus the collector logs one error and every other
+      # collector keeps working — watch node_scrape_collector_success{
+      # collector="systemd"} to spot it.
+      - DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket
+    security_opt:
+      # Ubuntu 23.10+ ships dbus-daemon with AppArmor mediation that rejects
+      # clients confined by Docker's default profile, so the systemd collector
+      # can't reach the bus. Run just this exporter unconfined (it only reads
+      # host metrics, read-only). Silently ignored on non-AppArmor kernels.
+      - apparmor:unconfined
     pid: host
     volumes:
       - /:/host:ro,rslave
@@ -78,7 +92,7 @@ services:
       - client-net
 
   dcgm-exporter:
-    image: nvidia/dcgm-exporter:latest
+    image: nvidia/dcgm-exporter:4.8.3
     container_name: metrics-stack-client-dcgm-exporter
     profiles: ["gpu"]
     runtime: nvidia
@@ -98,7 +112,7 @@ services:
       - client-net
 
   ras-exporter:
-    image: python:3.12-slim
+    image: python:3.12.14-slim
     container_name: metrics-stack-client-ras-exporter
     profiles: ["ras"]
     command: python /exporter.py

@@ -168,6 +168,19 @@ prometheus.scrape "host" {
       job         = "node",
     },
   ]
+  forward_to = [prometheus.relabel.host.receiver]
+}
+
+// node_exporter's node_uname_info carries a built-in machine="x86_64" label
+// (the CPU arch). remote_write external_labels won't override an existing
+// label, so that one metric would keep the wrong machine value. Drop the
+// exporter's machine label on this pipeline (node_uname_info is the only
+// node_exporter metric that sets it) so the stamped machine wins everywhere.
+prometheus.relabel "host" {
+  rule {
+    action = "labeldrop"
+    regex  = "machine"
+  }
   forward_to = [prometheus.remote_write.server.receiver]
 }
 

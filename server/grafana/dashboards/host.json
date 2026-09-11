@@ -39,7 +39,7 @@
               }
             ]
           },
-          "unit": "s",
+          "unit": "humduration",
           "decimals": 0
         },
         "overrides": []
@@ -65,8 +65,9 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "time() - node_boot_time_seconds{machine=~\"$machine\"}",
-          "instant": false
+          "expr": "time() - max by (machine) (node_boot_time_seconds{machine=~\"$machine\"} > 0)",
+          "instant": false,
+          "legendFormat": "{{machine}}"
         }
       ]
     },
@@ -88,7 +89,7 @@
               }
             ]
           },
-          "unit": "s",
+          "unit": "dateTimeAsIso",
           "decimals": 0
         },
         "overrides": []
@@ -114,8 +115,9 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "node_boot_time_seconds{machine=~\"$machine\"}",
-          "instant": false
+          "expr": "node_boot_time_seconds{machine=~\"$machine\"} > 0",
+          "instant": false,
+          "legendFormat": "{{machine}}"
         }
       ]
     },
@@ -510,6 +512,7 @@
             "fillOpacity": 10,
             "lineWidth": 2
           },
+          "unit": "dthms",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -544,7 +547,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "time() - node_boot_time_seconds{machine=~\"$machine\"}",
+          "expr": "time() - max by (machine) (node_boot_time_seconds{machine=~\"$machine\"} > 0)",
           "instant": false,
           "legendFormat": "{{machine}}"
         }
@@ -1080,7 +1083,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "time() - max(ras_last_mc_event_timestamp_seconds{machine=~\"$machine\"})",
+          "expr": "time() - max(ras_last_mc_event_timestamp_seconds{machine=~\"$machine\"} > 0)",
           "instant": false
         }
       ]
@@ -1137,7 +1140,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "max by (machine) (node_hwmon_temp_celsius{machine=~\"$machine\",chip=~\".*18_3\"})",
+          "expr": "max by (machine) (node_hwmon_temp_celsius{machine=~\"$machine\",chip=~\"(?i).*(k10temp|coretemp|cpu_?thermal|cpu_?temp|soc_?thermal|zenpower|18_3).*\"})\nor\nmax by (machine) (node_hwmon_temp_celsius{machine=~\"$machine\",chip!~\"(?i)nvme.*\"})",
           "instant": false
         }
       ]
@@ -1190,7 +1193,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum by (machine) (rate(ras_mc_event_total{machine=~\"$machine\"}[15m]) * 3600)",
+          "expr": "sum by (machine) (rate(ras_mc_event_total{machine=~\"$machine\",err_type=\"corrected\"}[15m]) * 3600)",
           "instant": false,
           "legendFormat": "{{machine}}"
         }
@@ -1244,7 +1247,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum by (machine, label) (increase(ras_mc_event_total{machine=~\"$machine\"}[1h]))",
+          "expr": "sum by (machine, label) (increase(ras_mc_event_total{machine=~\"$machine\",err_type=\"corrected\"}[1h]))",
           "instant": false,
           "legendFormat": "{{machine}} {{label}}"
         }
@@ -1299,7 +1302,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "topk(8, sum by (machine, label) (ras_mc_event_total{machine=~\"$machine\"}))",
+          "expr": "topk(8, sum by (machine, label) (ras_mc_event_total{machine=~\"$machine\",err_type=\"corrected\"}))",
           "instant": true,
           "legendFormat": "{{machine}} {{label}}"
         }
@@ -1440,10 +1443,10 @@
     },
     {
       "type": "timeseries",
-      "title": "Error log entries",
+      "title": "Error log rate by program",
       "datasource": {
-        "type": "prometheus",
-        "uid": "Prometheus"
+        "type": "loki",
+        "uid": "Loki"
       },
       "fieldConfig": {
         "defaults": {
@@ -1452,6 +1455,7 @@
             "fillOpacity": 10,
             "lineWidth": 2
           },
+          "unit": "lines/5m",
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -1483,11 +1487,11 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "Prometheus"
+            "type": "loki",
+            "uid": "Loki"
           },
-          "expr": "sum by (machine, program) (increase(loki_process_custom_syslog_lines_total{machine=~\"$machine\"}[5m]))",
-          "instant": false,
+          "query": "sum by (machine, program) (count_over_time({job=\"syslog\", machine=~\"$machine\"} |~ \"(?i)(error|panic|fatal|critical|segfault|oom|killed|failed)\" [5m]))",
+          "queryType": "range",
           "legendFormat": "{{machine}} {{program}}"
         }
       ]

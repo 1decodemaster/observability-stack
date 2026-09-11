@@ -111,7 +111,7 @@ Predefined metric sets:
 
 | Set | What it captures | Enabled by |
 |---|---|---|
-| host | CPU, RAM, load, disk, network, hwmon temps, EDAC | always |
+| host | CPU, RAM, load, disk, network, hwmon temps, EDAC, systemd unit states | always |
 | GPU | DCGM: util, VRAM, power, temp, clocks | `gpu` profile + NVIDIA driver |
 | RAS | per-DIMM corrected/uncorrected memory errors (rasdaemon), MCE records | `ras` profile + rasdaemon installed |
 | LLM | vLLM / llama.cpp serving metrics + serving logs (`role="serving"`) | `LLM_TARGET_1..3` / `LLM_CONTAINER_1..3` |
@@ -211,8 +211,24 @@ The server is model-agnostic; the per-machine decisions live in the client
   the `loki.write` / `prometheus.remote_write` endpoint blocks and matching
   auth on the server later).
 - **node_exporter label collision**: `node_uname_info` carries its own
-  `machine="x86_64"` label (CPU arch); the external `machine` label doesn't
-  override it, so that one metric shows `machine=<arch>` in the $machine
-  dropdown. Cosmetic; no panel uses `node_uname_info`.
+  `machine="x86_64"` label (CPU arch), which the `machine` external label can
+  not override. A `prometheus.relabel "host"` component in the client config
+  drops the exporter's `machine` label before shipping, so the stamped machine
+  wins everywhere (dropdown included).
+- **systemd collector requirements**: node-exporter runs with
+  `--collector.systemd` and reaches the host D-Bus via
+  `DBUS_SYSTEM_BUS_ADDRESS=unix:path=/host/run/dbus/system_bus_socket` (the
+  socket is already visible through the `/host` read-only bind — no extra
+  mount). Ubuntu ≥ 23.10 dbus-daemon enforces AppArmor mediation that rejects
+  Docker-confined clients, so the exporter runs with
+  `security_opt: apparmor:unconfined` (ignored on non-AppArmor kernels). On
+  distros without systemd/dbus the collector logs one error and the rest of
+  node-exporter works normally — check
+  `node_scrape_collector_success{collector="systemd"}` to verify per machine.
+- **Pinned versions**: all images are pinned (client: alloy v1.19.2,
+  node-exporter v1.12.1, dcgm-exporter 4.8.3, python 3.12.14-slim; server:
+  Loki 3.7.7, Prometheus v3.14.0, Grafana 13.2.1, Alertmanager v0.34.0).
+  Upgrade = bump the tag + `docker compose up -d`; `:latest` drifts silently
+  across a fleet deployed over months.
 - Alloy agent UI/debug: http://<client>:12345 (component health, WAL state).
 - To inspect hardware errors on a client directly: `sudo ras-mc-ctl --summary`.

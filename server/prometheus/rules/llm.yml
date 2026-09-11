@@ -8,16 +8,19 @@ groups:
   - name: llm_normalized
     interval: 15s
     rules:
-      # Decode / generation tokens per second
+      # Decode / generation tokens per second.
+      # NOTE: the llm scrape runs at the Alloy default (60s), so a [1m] rate
+      # window usually has only one sample and yields no series (empty panels).
+      # [5m] always has >=2 samples, so the throughput is actually computed.
       - record: llm:decode_tokens_per_second
         expr: |
-          sum by (machine) (rate(vllm:generation_tokens_total[1m]))
+          sum by (machine) (rate(vllm:generation_tokens_total[5m]))
           or on(machine) sum by (machine) (llamacpp:predicted_tokens_seconds)
 
       # Prompt tokens per second
       - record: llm:prompt_tokens_per_second
         expr: |
-          sum by (machine) (rate(vllm:prompt_tokens_total[1m]))
+          sum by (machine) (rate(vllm:prompt_tokens_total[5m]))
           or on(machine) sum by (machine) (llamacpp:prompt_tokens_seconds)
 
       # Requests currently being processed
