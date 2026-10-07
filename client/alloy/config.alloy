@@ -204,6 +204,17 @@ prometheus.scrape "ras" {
   forward_to = [prometheus.remote_write.server.receiver]
 }
 
+// BMC memory (DIMM) temperatures + thresholds (profile: ipmi).
+prometheus.scrape "ipmi" {
+  targets = [
+    {
+      __address__ = "ipmi-exporter:9109",
+      job         = "ipmi",
+    },
+  ]
+  forward_to = [prometheus.remote_write.server.receiver]
+}
+
 // LLM serving backends (LLM_TARGET_1..3 in .env, e.g.
 // "host.docker.internal:8000"). entrypoint.sh materializes the non-blank
 // slots into llm-targets.json (Prometheus file-SD format); blank = disabled.

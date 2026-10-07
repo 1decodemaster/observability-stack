@@ -67,6 +67,12 @@ curl -s 'http://localhost:9090/api/v1/query?query=up'      # series per machine/
 curl -s 'http://localhost:3100/loki/api/v1/label/machine/values'  # ["<your machines>"]
 ```
 
+Grafana **PNG/PDF dashboard export works out of the box** via the internal
+`renderer` container (no port, no setup needed). To set a shared rendering
+auth token: `cd server && cp .env.example .env`, add
+`GF_RENDERING_AUTH_TOKEN=$(openssl rand -hex 32)`, then
+`docker compose up -d`. Details under "Grafana image rendering" below.
+
 Notes:
 
 - The server has **no scrape jobs** — it only receives, stores, alerts and
@@ -83,6 +89,9 @@ Notes:
 Requirements: Docker + compose plugin. Optional extras:
 - `gpu` profile → NVIDIA driver + docker `nvidia` runtime
 - `ras` profile → `rasdaemon` running on the host (`apt install rasdaemon`)
+- `ipmi` profile → in-band BMC with `/dev/ipmi0` (kernel modules `ipmi_si` +
+  `ipmi_devintf` loaded; persist via `/etc/modules-load.d/ipmi.conf`). Verify
+  with `ipmitool sensor list | grep -iE 'mem|dimm'`.
 
 ```bash
 # copy the repo (or just client/) to the machine, then:
@@ -100,7 +109,7 @@ The `.env` knobs:
 | `MACHINE` | Machine name stamped onto every metric sample and log stream. Must be unique per host (e.g. `pensive`, `spark-c081`). |
 | `SERVER_LOKI_URL` | `http://<server>:3100/loki/api/v1/push` |
 | `SERVER_PROM_URL` | `http://<server>:9090/api/v1/write` |
-| `COMPOSE_PROFILES` | Comma-separated: `gpu` (NVIDIA), `ras` (AMD/Intel RAS via rasdaemon) |
+| `COMPOSE_PROFILES` | Comma-separated: `gpu` (NVIDIA), `ras` (AMD/Intel RAS via rasdaemon), `ipmi` (BMC DIMM temps) |
 | `LLM_TARGET_1..3` | LLM serving metrics endpoints to scrape, up to 3, blank = off. Reachable from the host, e.g. `host.docker.internal:8000` (a published container port) |
 | `LLM_CONTAINER_1..3` | Docker container **names** of the serving engine(s), up to 3. Their log streams are tagged `role="serving"` and shown in the Model Inference dashboard. Blank = off. |
 
@@ -114,6 +123,7 @@ Predefined metric sets:
 | host | CPU, RAM, load, disk, network, hwmon temps, EDAC, systemd unit states | always |
 | GPU | DCGM: util, VRAM, power, temp, clocks | `gpu` profile + NVIDIA driver |
 | RAS | per-DIMM corrected/uncorrected memory errors (rasdaemon), MCE records | `ras` profile + rasdaemon installed |
+| RAM temp | per-sensor DIMM temperatures + BMC upper non-crit/crit thresholds (IPMI) | `ipmi` profile + BMC reachable via `/dev/ipmi0` |
 | LLM | vLLM / llama.cpp serving metrics + serving logs (`role="serving"`) | `LLM_TARGET_1..3` / `LLM_CONTAINER_1..3` |
 | logs | host syslog + **all** container logs → Loki | always |
 
@@ -153,6 +163,45 @@ state); hardware errors directly via `sudo ras-mc-ctl --summary`.
 After any client `.env` / `config.alloy` change: `docker compose up -d alloy`
 (recreates the container; WAL state in the `alloy-data` volume is preserved,
 so nothing in-flight is lost).
+
+## Grafana image rendering (PNG / PDF export)
+
+Dashboard PNG/PDF export (top-right ⋯ → **Export** → Save as image) needs a
+rendering backend. The in-container `grafana-image-renderer` plugin is
+**deprecated** by Grafana, so the supported path is the standalone service —
+the sibling `renderer` container (headless Chromium; the image bundles its
+own Node.js + Chromium + libs, image `grafana/grafana-image-renderer:v5.12.5`).
+It is internal-only (no published port, no volume) and needs no datasource
+access of its own: `grafana` calls it at
+`GF_RENDERING_SERVER_URL=http://renderer:8081/render`, and the renderer pulls
+the dashboard through the Grafana API at
+`GF_RENDERING_CALLBACK_URL=http://grafana:3000/`.
+
+**Auth token — one-time setup from `server/.env`.** Both sides share
+`GF_RENDERING_AUTH_TOKEN` (the renderer exposes it as `SECRET_TOKEN`). Blank
+= the built-in `-` default on both sides, which is fine on a private
+LAN/tailnet:
+
+```bash
+cd server
+cp .env.example .env                                  # once
+echo "GF_RENDERING_AUTH_TOKEN=$(openssl rand -hex 32)" >> .env
+docker compose up -d                                  # recreates grafana + renderer with the new env
+```
+
+`.env` is a file on disk, so this survives reboots with no further setup —
+the containers restart with the env they were created with. A plain
+`docker compose restart` does **not** re-read `.env`; use `up -d` after any
+change (it recreates only what changed; volumes are untouched).
+
+- **RAM**: each render spawns a Chromium instance; Grafana recommends ≥16GB
+  free for parallel renders. One-off exports from a client are fine on a
+  normal box — don't script parallel bulk exports on a small server.
+- **Troubleshoot**: `docker compose logs renderer`. A failed callback is the
+  usual culprit — both env vars must be container names on the compose
+  network, not host IPs.
+- **Disable**: remove the `renderer` service and the three `GF_RENDERING_*`
+  lines on `grafana`, then `docker compose up -d`.
 
 ## How model-inference monitoring is wired (for reference)
 
@@ -227,8 +276,19 @@ The server is model-agnostic; the per-machine decisions live in the client
   `node_scrape_collector_success{collector="systemd"}` to verify per machine.
 - **Pinned versions**: all images are pinned (client: alloy v1.19.2,
   node-exporter v1.12.1, dcgm-exporter 4.8.3, python 3.12.14-slim; server:
-  Loki 3.7.7, Prometheus v3.14.0, Grafana 13.2.1, Alertmanager v0.34.0).
+  Loki 3.7.7, Prometheus v3.14.0, Grafana 13.2.1, Alertmanager v0.34.0, Image Renderer v5.12.5).
   Upgrade = bump the tag + `docker compose up -d`; `:latest` drifts silently
-  across a fleet deployed over months.
+  across a fleet deployed over months. `ipmi-exporter` is a local build
+  (pinned python 3.12.14-slim base + distro `ipmitool`); rebuild after
+  touching `client/ipmi-exporter/`.
+- **ipmi-exporter (DIMM temps)**: reads the BMC over the in-band KCS device
+  (`/dev/ipmi0`). The compose service mounts that device, so the host must
+  have the `ipmi_si` + `ipmi_devintf` kernel modules loaded or the service
+  fails to start — keep the `ipmi` profile off on machines without a
+  reachable BMC. Metrics: `ipmi_mem_temp_celsius{sensor}`,
+  `ipmi_mem_temp_upper_non_crit_celsius`, `ipmi_mem_temp_upper_crit_celsius`
+  (NaN when the BMC publishes no threshold). Alerts (`MemTempHigh` /
+  `MemTempCritical`) use the per-sensor BMC thresholds and fall back to
+  85C / 95C when unpublished.
 - Alloy agent UI/debug: http://<client>:12345 (component health, WAL state).
 - To inspect hardware errors on a client directly: `sudo ras-mc-ctl --summary`.

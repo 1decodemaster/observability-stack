@@ -1373,6 +1373,184 @@
       ]
     },
     {
+      "type": "timeseries",
+      "title": "RAM (DIMM) temperature",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 95
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "ipmi_mem_temp_celsius{machine=~\"$machine\"}",
+          "instant": false,
+          "legendFormat": "{{sensor}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Hottest DIMM (now)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 95
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "max by (machine) (ipmi_mem_temp_celsius{machine=~\"$machine\"})",
+          "instant": false
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "title": "DIMM temperatures (now)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "Prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 80
+              },
+              {
+                "color": "red",
+                "value": 85
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellMode": "color-text",
+        "footer": {
+          "show": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 102
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "Prometheus"
+          },
+          "expr": "ipmi_mem_temp_celsius{machine=~\"$machine\"}",
+          "instant": true,
+          "legendFormat": "{{sensor}}"
+        }
+      ]
+    },
+    {
       "type": "row",
       "title": "System Logs",
       "collapsed": false,
@@ -1380,7 +1558,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 95
+        "y": 110
       },
       "panels": [],
       "id": 202
@@ -1427,7 +1605,7 @@
         "h": 4,
         "w": 6,
         "x": 0,
-        "y": 96
+        "y": 111
       },
       "targets": [
         {
@@ -1481,7 +1659,7 @@
         "h": 7,
         "w": 12,
         "x": 6,
-        "y": 96
+        "y": 111
       },
       "targets": [
         {
@@ -1507,7 +1685,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 103
+        "y": 118
       },
       "targets": [
         {
@@ -1536,7 +1714,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 103
+        "y": 118
       },
       "targets": [
         {
@@ -1565,7 +1743,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 111
+        "y": 126
       },
       "targets": [
         {

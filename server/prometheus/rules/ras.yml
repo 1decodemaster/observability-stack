@@ -33,3 +33,32 @@ groups:
         annotations:
           summary: "Hardware temperature high on {{ $labels.machine }}"
           description: "The hottest hwmon sensor is above 85C for 5 minutes. Verify CPU/fan cooling and airflow."
+
+      # DIMM temperature above the BMC's upper non-critical threshold, with a
+      # 85C fallback for sensors whose threshold the BMC does not publish
+      # (unpublished thresholds export as NaN and never match a comparison,
+      # so only the fallback branch fires for those).
+      - alert: MemTempHigh
+        expr: (ipmi_mem_temp_celsius > ipmi_mem_temp_upper_non_crit_celsius)
+              or
+              (ipmi_mem_temp_celsius > 85 unless (ipmi_mem_temp_celsius > ipmi_mem_temp_upper_non_crit_celsius))
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory temperature high on {{ $labels.machine }} ({{ $labels.sensor }})"
+          description: "DIMM {{ $labels.sensor }} is above its BMC upper non-critical threshold (or 85C when the BMC publishes none) for 5 minutes. Check cooling and airflow."
+
+      # DIMM temperature above the BMC's upper CRITICAL threshold, with a 95C
+      # fallback. This is the "runs high temp" state: sustained over-temperature
+      # risks DIMM failure and CE storms.
+      - alert: MemTempCritical
+        expr: (ipmi_mem_temp_celsius > ipmi_mem_temp_upper_crit_celsius)
+              or
+              (ipmi_mem_temp_celsius > 95 unless (ipmi_mem_temp_celsius > ipmi_mem_temp_upper_crit_celsius))
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Memory temperature CRITICAL on {{ $labels.machine }} ({{ $labels.sensor }})"
+          description: "DIMM {{ $labels.sensor }} is above its BMC upper critical threshold (or 95C when the BMC publishes none). Verify cooling immediately."

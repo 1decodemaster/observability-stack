@@ -95,18 +95,18 @@ services:
     image: nvidia/dcgm-exporter:4.8.3
     container_name: metrics-stack-client-dcgm-exporter
     profiles: ["gpu"]
-    runtime: nvidia
+    # GPUs via CDI (nvidia.com/gpu) instead of the legacy `runtime: nvidia`,
+    # which needs the nvidia runtime registered in /etc/docker/daemon.json
+    # (otherwise: "unknown or invalid runtime name: nvidia"). CDI works with
+    # the plain runc runtime, no daemon restart. If the spec is missing or
+    # stale (e.g. after a driver update) regenerate it:
+    #   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+    devices:
+      - nvidia.com/gpu=all
     environment:
       - DCGM_EXPORTER_INTERVAL=2000
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
     restart: unless-stopped
     networks:
       - client-net
@@ -121,6 +121,30 @@ services:
     volumes:
       - ./ras-exporter/exporter.py:/exporter.py:ro
       - /var/lib/rasdaemon:/var/lib/rasdaemon:ro
+    restart: unless-stopped
+    networks:
+      - client-net
+
+  ipmi-exporter:
+    build:
+      context: ./ipmi-exporter
+      # Build-time DNS on the default bridge (which BuildKit sandboxes use)
+      # is broken on hosts with systemd-resolved + unreachable public DNS,
+      # so apt-get in the Dockerfile resolves nothing. Build over the host's
+      # network instead; runtime stays on client-net.
+      network: host
+    image: metrics-stack-ipmi-exporter:1.0
+    container_name: metrics-stack-client-ipmi-exporter
+    profiles: ["ipmi"]
+    # BMC memory (DIMM) temperatures via in-band IPMI (KCS). Requires the
+    # host's /dev/ipmi0 — i.e. the ipmi_si + ipmi_devintf kernel modules and
+    # a reachable BMC (see client/ipmi-exporter/Dockerfile). Without the
+    # device, `docker compose up` fails for this service: keep the profile
+    # off on machines without a BMC.
+    environment:
+      - IPMI_EXPORTER_PORT=9109
+    devices:
+      - /dev/ipmi0:/dev/ipmi0
     restart: unless-stopped
     networks:
       - client-net
